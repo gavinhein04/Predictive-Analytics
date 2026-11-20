@@ -5,25 +5,22 @@
 # -----------------------------------------------------------------------------
 # Possible Methods
 # -----------------------------------------------------------------------------
-# Logistic regression
-# LDA and QDA
-# KNN classifier
-# Naive Bayes
-# Ridge and Lasso regression
-# Linear, cubic, and smoothing splines
-# Decision tree
-# Random forest
-# Bagging and boosting
-# BART
-# SVMs
+# Logistic regression (w/ stepwise selection)   Implemented
+# LDA/QDA                                       Should implement
+# KNN classifier                                Maybe?
+# Naive Bayes                                   Maybe?
+# Ridge and Lasso regression                    Implemented
+# Linear, cubic, and smoothing splines          Maybe?
+# Decision tree                                 Implemented
+# Random forest                                 Implemented
+# Bagging and boosting                          Implemented
+# BART                                          Implemented
+# SVMs                                          Should implement
 
 # Import libraries
 library(BART)           # for BART
-library(caret)          # for train() function
-library(MASS)           # for forward and backward selection
-library(randomForest)   # for bagging
+library(caret)          # for train() function used to fit most of the models
 library(tidyverse)      # for data cleaning
-library(tree)           # for standard tree
 
 # Set the seed for reproducibility
 set.seed(67)
@@ -32,6 +29,11 @@ set.seed(67)
 df_clean <- read.csv("df_clean.csv")
 df_clean <- df_clean %>%
   mutate(across(where(is.character), as_factor))
+df_clean$Churn <- factor(df_clean$Churn, levels = c("Yes", "No"))
+
+# # Sanity check (the first factor level must be the positive event when using the `caret` package)
+# levels(df_clean$Churn)[1] == "Yes"
+# levels(df_clean$Churn)[2] == "No"
 
 # Use 80/20 split for train/test data
 train_index <- createDataPartition(df_clean$Churn, p = 0.8, list = FALSE)
@@ -41,236 +43,326 @@ test <- df_clean[-train_index, ]
 # -----------------------------------------------------------------------------
 # Logistic Regression (Using `caret`)
 # -----------------------------------------------------------------------------
-# Define CV method for logistic regression
-tr_control_logistic <- trainControl(method = "cv", number = 10)
+tr_control_logistic <- trainControl(
+  method = "cv", 
+  number = 5, 
+  classProbs = TRUE, 
+  summaryFunction = twoClassSummary
+)
 
 # Implement logistic regression
-logistic_mod <- train(
+mod_logistic <- train(
   Churn ~ ., 
   data = train, 
   method = "glm", 
   family = "binomial", 
   trControl = tr_control_logistic, 
-  metric = "Accuracy"
+  metric = "ROC"
 )
-print(logistic_mod)
-summary(logistic_mod$finalModel)
+print(mod_logistic)
+results_logistic <- mod_logistic$results
+results_logistic
 
 # Make predictions using test data
-logistic_pred <- predict(logistic_mod, newdata = test)
-
-# Create and show confusion matrix
-logistic_conf_mat <- confusionMatrix(logistic_pred, test$Churn)
-logistic_conf_mat
-
-# -----------------------------------------------------------------------------
-# Feature Selection Using Forward and Backward Selection (Using `MASS`)
-# -----------------------------------------------------------------------------
-# Defining the null and full models for forward and backward selection, respectively
-null_model <- glm(Churn ~ 1, data = train, family = binomial)
-full_model <- glm(Churn ~ ., data = train, family = binomial)
-
-# Forward Selection
-forward_model <- stepAIC(
-  null_model,
-  direction = "forward",
-  scope = list(lower = ~ 1, upper = ~ .),
-  trace = 0,
-  k = 2
+pred_logistic <- predict(
+  object = mod_logistic, 
+  newdata = test
 )
 
-# Backward Selection
-backward_model <- stepAIC(
-  full_model, 
-  direction = "backward", 
-  trace = 0, 
-  k = 2
+# Create confusion matrix and show accuracy
+cm_logistic <- confusionMatrix(
+  data = pred_logistic, 
+  reference = test$Churn, 
+  positive = "Yes"
 )
-
-# View model summaries
-summary(forward_model)
-summary(backward_model)
-
-# Make predictions using both models
-pred_class_forward <- predict(forward_model, newdata = test, type = "response")
-pred_class_forward <- ifelse(pred_class_forward > 0.5, 1, 0)
-
-pred_class_backward <- predict(backward_model, newdata = test, type = "response")
-pred_class_backward <- ifelse(pred_class_backward > 0.5, 1, 0)
-
-# Prepare data for confusion matrix
-pred_class_forward <- as.factor(unname(pred_class_forward))
-pred_class_backward <- as.factor(unname(pred_class_backward))
-actual_vec <- as.factor(ifelse(test$Churn == "Yes", 1, 0))
-
-# Make confusion matrices
-conf_mat_forward <- confusionMatrix(
-  data = pred_class_forward, 
-  reference = actual_vec, 
-  positive = "1"
-)
-conf_mat_forward
-
-conf_mat_backward <- confusionMatrix(
-  data = pred_class_backward, 
-  reference = actual_vec, 
-  positive = "1"
-)
-conf_mat_backward
-
-# Get classification error
-class_error_forward <- 1 - unname(conf_mat_forward$overall["Accuracy"])
-class_error_forward
-# The forward model always predicts "No". Since most of the observations didn't churn, this model gets ~75% accuracy without having learned anything.
-
-class_error_backward <- 1 - unname(conf_mat_backward$overall["Accuracy"])
-class_error_backward
-# 19.70% of the observations were misclassified.
+cm_logistic
+acc_logistic <- cm_logistic$overall['Accuracy']
+acc_logistic
 
 # -----------------------------------------------------------------------------
-# Lasso and Ridge Regression (Using `caret`)
+# Logistic Regression with Stepwise Feature Selection (Using `caret`)
 # -----------------------------------------------------------------------------
-tr_control_glmnet <- trainControl(method = "cv", number = 10)
+tr_control_stepwise <- trainControl(
+  method = "cv", 
+  number = 5, 
+  classProbs = TRUE, 
+  summaryFunction = twoClassSummary
+)
 
-grid_lasso <- expand.grid(alpha = 1, lambda = 10^seq(2, -3, length = 100))
-grid_ridge <- expand.grid(alpha = 0, lambda = 10^seq(2, -3, length = 100))
+# Implement logistic regression with stepwise selection
+mod_stepwise_both <- train(
+  Churn ~ ., 
+  data = train, 
+  method = "glmStepAIC", 
+  family = "binomial", 
+  direction = "both", 
+  trControl = tr_control_stepwise, 
+  metric = "ROC"
+)
+print(mod_stepwise_both)
+results_stepwise_both <- mod_stepwise_both$results
+results_stepwise_both
+
+# Make predictions using test data
+pred_stepwise_both <- predict(
+  object = mod_stepwise_both, 
+  newdata = test
+)
+
+# Create confusion matrix and show accuracy
+cm_stepwise_both <- confusionMatrix(
+  data = pred_stepwise_both, 
+  reference = test$Churn, 
+  positive = "Yes"
+)
+cm_stepwise_both
+acc_stepwise_both <- cm_stepwise_both$overall['Accuracy']
+acc_stepwise_both
+
+# -----------------------------------------------------------------------------
+# Lasso Regression (Using `caret`)
+# -----------------------------------------------------------------------------
+tr_control_lasso <- trainControl(
+  method = "cv", 
+  number = 5, 
+  classProbs = TRUE, 
+  summaryFunction = twoClassSummary
+)
+
+grid_lasso <- expand.grid(
+  alpha = 1, 
+  lambda = 10^seq(2, -3, length = 100)
+)
 
 # Implement lasso regression
-lasso_mod <- train(
+mod_lasso <- train(
   Churn ~ ., 
   data = train, 
   method = "glmnet", 
-  trControl = tr_control_glmnet, 
+  family = "binomial", 
+  trControl = tr_control_lasso, 
   tuneGrid = grid_lasso, 
   preProcess = c("center", "scale"), 
-  metric = "Accuracy"
+  metric = "ROC"
 )
-print(lasso_mod)
-print(lasso_mod$bestTune)
-coef(lasso_mod$finalModel, lasso_mod$bestTune$lambda)
+print(mod_lasso)
+best_tune_lasso <- mod_lasso$bestTune
+best_lambda_lasso <- best_tune_lasso$lambda
+results_lasso <- mod_lasso$results
+results_best_lambda_lasso <- results_lasso %>%
+  filter(lambda == best_lambda_lasso)
+results_best_lambda_lasso
+
+# Make predictions using test data
+pred_lasso <- predict(
+  object = mod_lasso, 
+  newdata = test
+)
+
+# Create confusion matrix and show accuracy
+cm_lasso <- confusionMatrix(
+  data = pred_lasso, 
+  reference = test$Churn, 
+  positive = "Yes"
+)
+cm_lasso
+acc_lasso <- cm_lasso$overall['Accuracy']
+acc_lasso
+
+# -----------------------------------------------------------------------------
+# Ridge Regression (Using `caret`)
+# -----------------------------------------------------------------------------
+tr_control_ridge <- trainControl(
+  method = "cv", 
+  number = 5, 
+  classProbs = TRUE, 
+  summaryFunction = twoClassSummary
+)
+
+grid_ridge <- expand.grid(
+  alpha = 0, 
+  lambda = 10^seq(2, -3, length = 100)
+)
 
 # Implement ridge regression
-ridge_mod <- train(
+mod_ridge <- train(
   Churn ~ ., 
   data = train, 
   method = "glmnet", 
-  trControl = tr_control_glmnet, 
+  family = "binomial", 
+  trControl = tr_control_ridge, 
   tuneGrid = grid_ridge, 
   preProcess = c("center", "scale"), 
-  metric = "Accuracy"
+  metric = "ROC"
 )
-print(ridge_mod)
-print(ridge_mod$bestTune)
-coef(ridge_mod$finalModel, ridge_mod$bestTune$lambda)
+print(mod_ridge)
+best_tune_ridge <- mod_ridge$bestTune
+best_lambda_ridge <- best_tune_ridge$lambda
+results_ridge <- mod_ridge$results
+results_best_lambda_ridge <- results_ridge %>%
+  filter(lambda == best_lambda_ridge)
+results_best_lambda_ridge
 
 # Make predictions using test data
-lasso_mod_pred <- predict(lasso_mod, newdata = test)
-ridge_mod_pred <- predict(ridge_mod, newdata = test)
-
-# Create and show confusion matrix
-lasso_mod_conf_mat <- confusionMatrix(lasso_mod_pred, test$Churn)
-lasso_mod_conf_mat
-
-ridge_mod_conf_mat <- confusionMatrix(ridge_mod_pred, test$Churn)
-ridge_mod_conf_mat
-
-# -----------------------------------------------------------------------------
-# Decision Tree (Using `tree`)
-# -----------------------------------------------------------------------------
-# Create and plot the tree
-standard_tree <- tree(Churn ~ ., data = train)
-summary(standard_tree)
-plot(standard_tree)
-text(standard_tree, pretty = 0, digits = 1, cex = 0.5)
-
-# Make predictions
-pred_standard_tree <- predict(standard_tree, newdata = test, type = "class")
-
-# Show confusion matrix and classification error rate
-conf_matrix_standard_tree <- table(Predicted = pred_standard_tree, Actual = test$Churn)
-conf_matrix_standard_tree
-class_error_standard_tree <- 1 - (sum(diag(conf_matrix_standard_tree)) / sum(conf_matrix_standard_tree))   # 20.41% of the observations were misclassified.
-
-# -----------------------------------------------------------------------------
-# Prune the Decision Tree (Using `tree`)
-# -----------------------------------------------------------------------------
-# Find optimal number of terminal nodes via CV
-cv_results_tree <- cv.tree(standard_tree, FUN = prune.misclass, K = 10)
-
-best_size <- cv_results_tree$size[which.min(cv_results_tree$dev)]
-
-pruned_model <- prune.misclass(standard_tree, best = best_size)
-
-# Plot the pruned tree
-plot(pruned_model)
-text(pruned_model, pretty = 0, digits = 1, cex = 0.5)
-
-# Make predictions
-pred_pruned_tree <- predict(pruned_model, newdata = test, type = "class")
-
-# Show confusion matrix and classification error rate
-conf_matrix_pruned_tree <- table(Predicted = pred_pruned_tree, Actual = test$Churn)
-conf_matrix_pruned_tree
-class_error_pruned_tree <- 1 - (sum(diag(conf_matrix_pruned_tree)) / sum(conf_matrix_pruned_tree))   # 20.41% of the observations were misclassified.
-
-# The standard tree and the pruned tree are identical.
-
-# -----------------------------------------------------------------------------
-# Bagging (Using 'randomForest`)
-# -----------------------------------------------------------------------------
-# Implement bagging
-bagging <- randomForest(
-  Churn ~ ., 
-  data = train, 
-  mtry = ncol(train) - 1, 
-  ntree = 100, 
-  importance = TRUE
+pred_ridge <- predict(
+  object = mod_ridge, 
+  newdata = test
 )
 
-# Make predictions
-pred_bagging <- predict(bagging, newdata = test, type = "class")
+# Create confusion matrix and show accuracy
+cm_ridge <- confusionMatrix(
+  data = pred_ridge, 
+  reference = test$Churn, 
+  positive = "Yes"
+)
+cm_ridge
+acc_ridge <- cm_ridge$overall['Accuracy']
+acc_ridge
 
-# Show confusion matrix and classification error rate
-conf_matrix_bagging <- table(Predicted = pred_bagging, Actual = test$Churn)
-conf_matrix_bagging
-class_error_bagging <- 1 - (sum(diag(conf_matrix_bagging)) / sum(conf_matrix_bagging))   # 22.33% of the observations were misclassified.
+# -----------------------------------------------------------------------------
+# Decision Tree (Using `caret`)
+# -----------------------------------------------------------------------------
+tr_control_tree <- trainControl(
+  method = "cv", 
+  number = 5, 
+  classProbs = TRUE, 
+  summaryFunction = twoClassSummary
+)
 
-importance(bagging)
+grid_tree = expand.grid(
+  cp = seq(0.001, 0.1, length.out = 20)
+)
+
+# Implement standard decision tree
+mod_tree <- train(
+  Churn ~ ., 
+  data = train, 
+  method = "rpart", 
+  trControl = tr_control_tree, 
+  tuneGrid = grid_tree, 
+  metric = "ROC"
+)
+print(mod_tree)
+best_cp_tree <- mod_tree$bestTune$cp
+results_tree <- mod_tree$results
+results_best_cp_tree <- results_tree %>%
+  filter(cp == best_cp_tree)
+
+# Plot the fitted tree
+rpart.plot(
+  mod_tree$finalModel, 
+  main = "Decision Tree"
+)
+
+# Make predictions using test data
+pred_tree <- predict(
+  object = mod_tree, 
+  newdata = test
+)
+
+# Create confusion matrix and show accuracy
+cm_tree <- confusionMatrix(
+  data = pred_tree, 
+  reference = test$Churn
+)
+cm_tree
+acc_tree <- cm_tree$overall['Accuracy']
+acc_tree
+
+# -----------------------------------------------------------------------------
+# Bagging (Using `caret`)
+# -----------------------------------------------------------------------------
+tr_control_bagging <- trainControl(
+  method = "cv", 
+  number = 5, 
+  classProbs = TRUE, 
+  summaryFunction = twoClassSummary
+)
+
+# Implement bagging
+mod_bagging <- train(
+  Churn ~ ., 
+  data = train, 
+  method = "treebag", 
+  trControl = tr_control_bagging, 
+  metric = "ROC"
+)
+print(mod_bagging)
+results_bagging <- mod_bagging$results
+results_bagging
+
+# Make predictions using test data
+pred_bagging <- predict(
+  object = mod_bagging, 
+  newdata = test
+)
+
+# Create confusion matrix and show accuracy
+cm_bagging <- confusionMatrix(
+  data = pred_bagging, 
+  reference = test$Churn
+)
+cm_bagging
+acc_bagging <- cm_bagging$overall['Accuracy']
+acc_bagging
 
 # -----------------------------------------------------------------------------
 # Random Forest (Using `caret`)
 # -----------------------------------------------------------------------------
-# Define CV method for random forest
-tr_control_rf <- trainControl(method = "cv", number = 5)
+tr_control_rf <- trainControl(
+  method = "cv", 
+  number = 5, 
+  classProbs = TRUE, 
+  summaryFunction = twoClassSummary
+)
 
-# Define tuning parameters to try
-grid_rf <- expand.grid(mtry = c(2, 4, 6, 8, 10))
+grid_rf <- expand.grid(
+  mtry = c(2, 4, 6, 8, 10), 
+  n.trees = c(100, 500, 1000)
+)
 
 # Implement random forest
-rf_mod <- train(
+mod_rf <- train(
   Churn ~ ., 
   data = train, 
   method = "rf", 
   trControl = tr_control_rf, 
   tuneGrid = grid_rf, 
-  metric = "Accuracy"
+  metric = "ROC"
 )
-print(rf_mod)
+print(mod_rf)
+best_tune_rf <- mod_rf$bestTune
+best_mtry_rf <- best_tune_rf$mtry
+results_rf <- mod_rf$results
+results_best_mtry_rf <- results_rf %>%
+  filter(mtry == best_mtry_rf)
+results_best_mtry_rf
 
 # Make predictions using test data
-rf_pred <- predict(rf_mod, newdata = test)
+pred_rf <- predict(
+  object = mod_rf, 
+  newdata = test
+)
 
-# Create and show confusion matrix
-rf_conf_mat <- confusionMatrix(rf_pred, test$Churn)
-rf_conf_mat
+# Create confusion matrix and show accuracy
+cm_rf <- confusionMatrix(
+  data = pred_rf, 
+  reference = test$Churn, 
+  positive = "Yes")
+cm_rf
+acc_rf <- cm_rf$overall['Accuracy']
+acc_rf
 
 # -----------------------------------------------------------------------------
 # Boosting (Using `caret`)
 # -----------------------------------------------------------------------------
-# Define CV method for boosting
-tr_control_boosting <- trainControl(method = "cv", number = 5)
+tr_control_boosting <- trainControl(
+  method = "cv", 
+  number = 5, 
+  classProbs = TRUE, 
+  summaryFunction = twoClassSummary
+)
 
-# Define tuning parameters to try
 grid_boosting <- expand.grid(
   interaction.depth = c(1, 3, 5), 
   n.trees = c(100, 500, 1000), 
@@ -279,30 +371,40 @@ grid_boosting <- expand.grid(
 )
 
 # Implement boosting
-boosting_mod <- train(
+mod_boosting <- train(
   Churn ~ ., 
   data = train, 
   method = "gbm", 
   distribution = "bernoulli", 
   trControl = tr_control_boosting, 
   tuneGrid = grid_boosting, 
-  metric = "Accuracy", 
+  metric = "ROC", 
   verbose = TRUE
 )
-print(boosting_mod)
-print(boosting_mod$bestTune)
+print(mod_boosting)
+best_tune_boosting <- mod_boosting$bestTune
 
 # Make predictions using test data
-boosting_mod_pred <- predict(boosting_mod, newdata = test)
+pred_boosting <- predict(
+  object = mod_boosting, 
+  newdata = test
+)
 
-# Create and show confusion matrix
-boosting_mod_conf_mat <- confusionMatrix(boosting_mod_pred, test$Churn)
-boosting_mod_conf_mat
+# Create confusion matrix and show accuracy
+cm_boosting <- confusionMatrix(
+  data = pred_boosting, 
+  reference = test$Churn, 
+  positive = "Yes"
+)
+cm_boosting
+acc_boosting <- cm_boosting$overall['Accuracy']
+acc_boosting
 
 # -----------------------------------------------------------------------------
 # BART (Using `BART`)
 # -----------------------------------------------------------------------------
-bart_mod <- pbart(
+# Implement BART
+mod_bart <- pbart(
   x.train = x_train, 
   y.train = y_train, 
   x.test = x_test, 
@@ -312,11 +414,21 @@ bart_mod <- pbart(
 )
 
 # Make predictions
-pred_probs_bart <- predict(bart_mod, newdata = x_test)
+pred_probs_bart <- predict(
+  object = mod_bart, 
+  newdata = x_test
+)
 pred_probs_bart <- pred_probs_bart$prob.test.mean
 pred_class_bart <- ifelse(pred_probs_bart > 0.5, 1, 0)
 
 # Show confusion matrix and classification error rate
-conf_matrix_bart <- table(Predicted = pred_class_bart, Actual = test$Churn)
-conf_matrix_bart
-class_error_bart <- 1 - (sum(diag(conf_matrix_bart)) / sum(conf_matrix_bart))   # 19.20% of the observations were misclassified.
+cm_bart <- table(
+  Predicted = pred_class_bart, 
+  Actual = test$Churn
+)
+cm_bart
+class_error_bart <- 1 - (sum(diag(cm_bart)) / sum(cm_bart))   # 19.20% of the observations were misclassified.
+
+# -----------------------------------------------------------------------------
+# SVMs
+# -----------------------------------------------------------------------------
